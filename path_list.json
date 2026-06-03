@@ -1,0 +1,50 @@
+{
+    "ba": {
+        "original": "path/to/your/dataset/ba_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/checkpoints/ba_vae_generated.npz",
+            "gan": "path/to/your/checkpoints/ba_gan_generated.npz",
+            "ddpm": "path/to/your/checkpoints/ba_ddpm_generated.npz"
+        }
+    },
+    "planar": {
+        "original": "path/to/your/dataset/planar_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/checkpoints/planar_vae_generated.npz",
+            "gan": "path/to/your/checkpoints/planar_gan_generated.npz",
+            "ddpm": "path/to/your/checkpoints/planar_ddpm_generated.npz"
+        }
+    },
+    "sbm": {
+        "original": "path/to/your/dataset/sbm_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/checkpoints/sbm_vae_generated.npz",
+            "gan": "path/to/your/checkpoints/sbm_gan_generated.npz",
+            "ddpm": "path/to/your/checkpoints/sbm_ddpm_generated.npz"
+        }
+    },
+    "ws": {
+        "original": "path/to/your/dataset/ws_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/checkpoints/ws_vae_generated.npz",
+            "gan": "path/to/your/checkpoints/ws_gan_generated.npz",
+            "ddpm": "path/to/your/checkpoints/ws_ddpm_generated.npz"
+        }
+    },
+    "wba": {
+        "original": "path/to/your/dataset/wba_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/checkpoints/wba_vae_generated.npz",
+            "gan": "path/to/your/checkpoints/wba_gan_generated.npz",
+            "ddpm": "path/to/your/checkpoints/wba_ddpm_generated.npz"
+        }
+    },
+    "sc": {
+        "original": "path/to/your/dataset/sc_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/checkpoints/sc_vae_generated.npz",
+            "gan": "path/to/your/checkpoints/sc_gan_generated.npz",
+            "ddpm": "path/to/your/checkpoints/sc_ddpm_generated.npz"
+        }
+    }
+}

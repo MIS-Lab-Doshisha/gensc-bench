@@ -1,0 +1,50 @@
+{
+    "ba": {
+        "original": "path/to/your/dataset/ba_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/processed/ba_vae_thresholded.npz",
+            "gan": "path/to/your/processed/ba_gan_thresholded.npz",
+            "ddpm": "path/to/your/processed/ba_ddpm_thresholded.npz"
+        }
+    },
+    "planar": {
+        "original": "path/to/your/dataset/planar_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/processed/planar_vae_thresholded.npz",
+            "gan": "path/to/your/processed/planar_gan_thresholded.npz",
+            "ddpm": "path/to/your/processed/planar_ddpm_thresholded.npz"
+        }
+    },
+    "sbm": {
+        "original": "path/to/your/dataset/sbm_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/processed/sbm_vae_thresholded.npz",
+            "gan": "path/to/your/processed/sbm_gan_thresholded.npz",
+            "ddpm": "path/to/your/processed/sbm_ddpm_thresholded.npz"
+        }
+    },
+    "ws": {
+        "original": "path/to/your/dataset/ws_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/processed/ws_vae_thresholded.npz",
+            "gan": "path/to/your/processed/ws_gan_thresholded.npz",
+            "ddpm": "path/to/your/processed/ws_ddpm_thresholded.npz"
+        }
+    },
+    "wba": {
+        "original": "path/to/your/dataset/wba_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/processed/wba_vae_thresholded.npz",
+            "gan": "path/to/your/processed/wba_gan_thresholded.npz",
+            "ddpm": "path/to/your/processed/wba_ddpm_thresholded.npz"
+        }
+    },
+    "sc": {
+        "original": "path/to/your/dataset/sc_original.npz",
+        "reconstructions": {
+            "vae": "path/to/your/processed/sc_vae_thresholded.npz",
+            "gan": "path/to/your/processed/sc_gan_thresholded.npz",
+            "ddpm": "path/to/your/processed/sc_ddpm_thresholded.npz"
+        }
+    }
+}
