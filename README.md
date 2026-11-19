@@ -154,7 +154,7 @@ Omit `--datasets` to plot individual adjacency matrices for all datasets in the 
 python -m eval.vis --path_config config/paths.yaml --plot_graphs # individual adjacency plots
 ```
 
-### 5.4 MMD and planarity
+### 5.3 MMD and planarity
 
 Install ORCA before computing MMD. Run MMD before appending strength and planarity to its CSVs.
 
@@ -168,20 +168,20 @@ python -m eval.evaluate --path_config config/paths.yaml --datasets planar --plan
 ```
 Embedding MMD is computed using the external implementation provided by Thompson et al. (2022). The external implementation requires a separate environment. Refer to the original repository for installation instructions.
 
-### 5.5 Modularity and small-worldness (sigma)
+### 5.4 Modularity and small-worldness (sigma)
 
 ```bash
 python -m eval.evaluate --path_config config/paths.yaml --datasets sbm nimh hcp --modularity
 python -m eval.calc_sigma --path_config config/paths.yaml --datasets ws nimh hcp
 ```
 
-### 5.6 Hub and strong-edge preservation
+### 5.5 Hub and strong-edge preservation
 
 ```bash
 python -m eval.evaluate --path_config config/paths.yaml --datasets nimh hcp --hub --jaccard
 ```
 
-### 5.7 Edge-wise variability, pairwise distances, and nearest neighbors
+### 5.6 Edge-wise variability, pairwise distances, and nearest neighbors
 
 ```bash
 python -m eval.vis --path_config config/paths.yaml --datasets nimh hcp --edge_var
