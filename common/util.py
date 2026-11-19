@@ -1,11 +1,8 @@
-import json
 import logging
 import random
 import sys
 import warnings
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,6 +18,8 @@ def set_seed(seed: int):
     torch.cuda.manual_seed_all(seed)
 
     torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 
 def get_reconstruction_from_npz(file_path) -> np.ndarray:
     ref = np.load(file_path, allow_pickle=True)
@@ -30,7 +29,7 @@ def get_reconstruction_from_npz(file_path) -> np.ndarray:
 
 
 def extract_tensor_from_dataloaders(
-    dataloaders: List[DataLoader], squeeze: bool = True
+    dataloaders: list[DataLoader], squeeze: bool = True
 ) -> torch.Tensor:
     all_data = []
 
@@ -50,7 +49,9 @@ def extract_tensor_from_dataloaders(
     return concatenated_data
 
 
-def plot_losses(losses_dict: Dict[str, List[float]], output_dir: str):
+def plot_losses(
+    losses_dict: dict[str, list[float]], output_dir: str | Path, name: str = "loss_plot"
+):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
 
     # Linear plot
@@ -89,149 +90,49 @@ def plot_losses(losses_dict: Dict[str, List[float]], output_dir: str):
     )
 
     plt.tight_layout()
-    plt.savefig(f"{output_dir}/loss_plot.pdf")
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    plt.savefig(f"{output_dir}/{name}.pdf")
     plt.close()
 
 
-def setup_logger(logger_name, log_file, level=logging.INFO, mode="w"):
+def setup_logger(log_file, level=logging.INFO, mode="w"):
     """
-    setup a logger
+    Configure a logger with the given settings.
 
     Parameters:
     -----------
     logger_name : str
+        Unique name of the logger.
     log_file : str
-    level : int, optional (ex: logging.INFO, logging.DEBUG)
+        Full path to the log file.
+    level : int, optional
+        Logging level (e.g., logging.INFO or logging.DEBUG).
 
     Returns:
     --------
     logging.Logger
+        Configured logger.
     """
     log_dir = Path(log_file).parent
     if log_dir:
         log_dir.mkdir(parents=True, exist_ok=True)
 
-    logger = logging.getLogger(logger_name)
+    logger = logging.getLogger()
     logger.setLevel(level)
 
-    if not logger.handlers:
-        handler = logging.FileHandler(log_file, mode=mode)
-        formatter = logging.Formatter(
-            "%(asctime)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
+    for handler in logger.handlers[:]:
+        handler.close()
+        logger.removeHandler(handler)
 
-        stream_handler = logging.StreamHandler(sys.stdout)
-        stream_handler.setFormatter(formatter)
-        logger.addHandler(stream_handler)
+    handler = logging.FileHandler(log_file, mode=mode)
+    formatter = logging.Formatter(
+        "%(asctime)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)  # Use the same format as the file handler.
+    logger.addHandler(stream_handler)
 
     return logger
-
-
-@dataclass
-class PathPair:
-    key: str
-    original_path: str
-    reconstruction_path: str
-
-    def __repr__(self):
-        return (
-            f"PathPair(key='{self.key}', "
-            f"ref='{self.original_path}', "
-            f"recon='{self.reconstruction_path}')"
-        )
-
-
-class PathListIterator:
-    def __init__(self, json_path):
-        """
-        Parameters:
-        -----------
-        json_path : str
-
-        """
-        self.json_path = Path(json_path)
-
-        if not self.json_path.exists():
-            raise FileNotFoundError(f"Error: {json_path} not found.")
-
-        with open(self.json_path, "r") as f:
-            self.data = json.load(f)
-
-    def __iter__(self) -> Iterator[PathPair]:
-        """
-        iterate over all path pairs in the JSON file
-
-        Yields:
-        -------
-        PathPair : (key, original_path, reconstruction_path)
-        """
-        for key in self.data.keys():
-            ref_path = self.data[key].get("original", "")
-            reconstructions = self.data[key].get("reconstructions", [])
-
-            for recon_path in reconstructions:
-                yield PathPair(
-                    key=key, original_path=ref_path, reconstruction_path=recon_path
-                )
-
-    def return_original_path(self, key: str) -> str:
-        if key not in self.data:
-            raise KeyError(f"Key '{key}' not found in {self.json_path}")
-        return self.data[key].get("original", "")
-
-    def iter_by_key(self, key: str) -> Iterator[PathPair]:
-        """
-        iterate over path pairs for a specific key
-
-        Parameters:
-        -----------
-        key : str
-
-        Yields:
-        -------
-        PathPair : (key, original_path, reconstruction_path)
-        """
-        if key not in self.data:
-            raise KeyError(f"Key '{key}' not found in {self.json_path}")
-
-        ref_path = self.data[key].get("original", "")
-        reconstructions = self.data[key].get("reconstructions", [])
-
-        for recon_path in reconstructions:
-            yield PathPair(
-                key=key, original_path=ref_path, reconstruction_path=recon_path
-            )
-
-    def iter_grouped_by_key(self) -> Iterator[Tuple[str, List[PathPair]]]:
-        """
-        iterate over path pairs grouped by key
-
-        Yields:
-        -------
-        tuple : (key, list of PathPair)
-        """
-        for key in self.data.keys():
-            pairs = list(self.iter_by_key(key))
-            yield key, pairs
-
-    def get_all_pairs(self) -> List[PathPair]:
-        """
-        Get all path pairs as a list
-
-        Returns:
-        --------
-        list of PathPair : list of all path pairs
-        """
-        return list(self)
-
-    def get_keys(self) -> List[str]:
-        """
-        Get a list of available keys
-
-        Returns:
-        --------
-        list of str : list of keys available in the JSON file
-        """
-        return list(self.data.keys())

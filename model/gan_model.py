@@ -1,7 +1,7 @@
+import logging
+
 import torch
 import torch.nn as nn
-import numpy as np
-import networkx as nx
 
 """
 ==========================================================================================
@@ -27,13 +27,16 @@ Estimated Total Size (MB): 5.74
 ==========================================================================================
 """
 
+
 class GanGenerator(nn.Module):
-    def __init__(self, latent_dim: int = 32, hidden_dim: int = 512, output_dim: int = 2016):
+    def __init__(
+        self, latent_dim: int = 32, hidden_dim: int = 512, output_dim: int = 2016
+    ):
         super(GanGenerator, self).__init__()
 
         self.latent_dim = latent_dim
 
-        self.layers = nn.Sequential(        
+        self.layers = nn.Sequential(
             nn.Linear(latent_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
             nn.LeakyReLU(),
@@ -41,13 +44,23 @@ class GanGenerator(nn.Module):
         )
         self.lastlayer = nn.Softplus()
 
+        print(
+            f"GanGenerator initialized with latent_dim={latent_dim}, hidden_dim={hidden_dim}, output_dim={output_dim}"
+        )
+
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"GanGenerator initialized with latent_dim={latent_dim}, hidden_dim={hidden_dim}, output_dim={output_dim}"
+        )
+
     def forward(self, z: torch.Tensor):
         # z: (batch_size, latent_dim)
         x = self.layers(z)
         x = self.lastlayer(x)
 
         return x
-    
+
+
 """
 ==========================================================================================
 Layer (type:depth-idx)                   Output Shape              Param #
@@ -71,6 +84,7 @@ Estimated Total Size (MB): 4.91
 ==========================================================================================
 """
 
+
 class GanCritic(nn.Module):
     def __init__(self, input_dim: int = 2016, hidden_dim: int = 512):
         super(GanCritic, self).__init__()
@@ -82,8 +96,11 @@ class GanCritic(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"GanCritic initialized with input_dim={input_dim}, hidden_dim={hidden_dim}"
+        )
+
     def forward(self, x: torch.Tensor):
         # x: (batch_size, input_dim)
         return self.layers(x)
-    
-

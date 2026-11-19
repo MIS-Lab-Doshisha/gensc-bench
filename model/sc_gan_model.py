@@ -1,8 +1,10 @@
+import logging
+
 import numpy as np
-import torch.nn as nn
+from torch import nn
 
 """
-blocks = 2, latent_dim = 8のとき
+Model summary for blocks = 2 and latent_dim = 8
 ==========================================================================================
 Layer (type:depth-idx)                   Output Shape              Param #
 ==========================================================================================
@@ -47,6 +49,8 @@ Estimated Total Size (MB): 178.09
 ==========================================================================================
 """
 
+logger = logging.getLogger(__name__)
+
 
 class GeneratorOpt(nn.Module):
     def __init__(
@@ -54,9 +58,12 @@ class GeneratorOpt(nn.Module):
         latent_dim,
         generator_n_blocks,
         output_dim,
-        first_hidden_dim=512,
-        last_hidden_dim=3335,
+        min_hidden_dim=512,
+        max_hidden_dim=3335,
     ):
+        first_hidden_dim = min_hidden_dim
+        last_hidden_dim = max_hidden_dim
+
         super().__init__()
         if generator_n_blocks < 2:
             raise ValueError(
@@ -90,6 +97,10 @@ class GeneratorOpt(nn.Module):
         self.hidden_layers = nn.Sequential(*layers)
         self.last_layer = nn.Softplus()
 
+        logger.info(
+            f"Initialized Generator with {generator_n_blocks} blocks, latent_dim: {latent_dim}, output_dim: {output_dim}, first_hidden_dim: {first_hidden_dim}, last_hidden_dim: {last_hidden_dim}"
+        )
+
     def forward(self, x):
         h = self.hidden_layers(x)
         h = self.last_layer(h)
@@ -99,7 +110,7 @@ class GeneratorOpt(nn.Module):
 
 class CriticMLPOpt(nn.Module):
     def __init__(
-        self, input_dim, critic_n_blocks, first_hidden_dim=3335, last_hidden_dim=512
+        self, input_dim, critic_n_blocks, max_hidden_dim=3335, min_hidden_dim=512
     ):
         """
         Initialize the MLP-based critic with a configurable number of blocks.
@@ -109,6 +120,8 @@ class CriticMLPOpt(nn.Module):
             n_blocks (int): Number of blocks in the MLP.
             base_hidden_size (int): Base hidden size for the first block, subsequent blocks will increase in size.
         """
+        first_hidden_dim = max_hidden_dim
+        last_hidden_dim = min_hidden_dim
         super().__init__()
         if critic_n_blocks < 2:
             raise ValueError(
@@ -139,6 +152,10 @@ class CriticMLPOpt(nn.Module):
 
         layers.append(nn.Linear(current_dim, 1))
         self.hidden_layers = nn.Sequential(*layers)
+
+        logger.info(
+            f"Initialized Critic with {critic_n_blocks} blocks, input_dim: {input_dim}, first_hidden_dim: {first_hidden_dim}, last_hidden_dim: {last_hidden_dim}"
+        )
 
     def forward(self, x):
         """

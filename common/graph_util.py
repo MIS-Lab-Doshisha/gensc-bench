@@ -1,13 +1,10 @@
 import math
 
-import matplotlib.pyplot as plt
-import networkx as nx
 import numpy as np
 import torch
-from matplotlib.colors import Normalize
 
 
-def vec_to_adj_matrix(vec):
+def vec_to_adj_matrix(vec: np.ndarray | torch.Tensor):
     is_tensor = False
     if type(vec) == torch.Tensor:
         is_tensor = True
@@ -127,42 +124,19 @@ def get_thresholded_matrix(matrices, threshold=0.0, is_weighted=False):
         matrices = matrices.detach().cpu().numpy()
 
     if is_weighted:
-        threholded = matrices.copy()
-        threholded = np.where(threholded > threshold, threholded, 0)
+        thresholded = matrices.copy()
+        thresholded = np.where(thresholded > threshold, thresholded, 0)
     else:
-        threholded = matrices.copy()
-        threholded = np.where(threholded > threshold, 1, 0)
+        thresholded = matrices.copy()
+        thresholded = np.where(thresholded > threshold, 1, 0)
 
     if is_tensor:
-        threholded = torch.from_numpy(threholded).to(torch.float32)
+        thresholded = torch.from_numpy(thresholded).to(torch.float32)
 
-    return threholded
-
-
-def plot_weighted_graph(g: nx.Graph, path=None):
-    fig, ax = plt.subplots()
-    edges, weights = zip(*nx.get_edge_attributes(g, "weight").items())
-    pos = nx.arf_layout(g)  # positions for all nodes
-    nx.draw(
-        g,
-        pos,
-        ax=ax,
-        with_labels=True,
-        edge_color=weights,
-        edge_cmap=plt.cm.cool,
-        edgelist=edges,
-        node_size=200,
-    )
-
-    sm = plt.cm.ScalarMappable(
-        cmap=plt.cm.cool, norm=Normalize(vmin=min(weights), vmax=max(weights))
-    )
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax, label="Edge Weight")
-    plt.savefig(path)
+    return thresholded
 
 
-def get_top_n_edges(adj, n, weighted=True):
+def get_top_n_edges(adj: np.ndarray, n: float, weighted=True) -> np.ndarray:
     """
     Args:
         adj (ndarray): Adjacency matrix
@@ -191,7 +165,9 @@ def get_top_n_edges(adj, n, weighted=True):
     return adj
 
 
-def get_topn_adj_list(adj_list, top_n):
+def get_topn_adj_list(
+    adj_list: np.ndarray | list[np.ndarray], top_n
+) -> list[np.ndarray]:
     """
     Args:
         adj_list (list of ndarray): List of adjacency matrices
@@ -207,7 +183,7 @@ def get_topn_adj_list(adj_list, top_n):
 
 
 def get_topns(dataset_name):
-    if dataset_name == "sc":
-        return [0.05, 0.1, 0.2, 0.3]
+    if dataset_name == "nimh" or dataset_name == "hcp":
+        return [0.05, 0.1, 0.15, 0.2, 0.3]
     else:
         return [None]

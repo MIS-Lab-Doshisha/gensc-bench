@@ -1,15 +1,15 @@
+import logging
 import math
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 from tqdm import tqdm
 
 from common.graph_util import (
     get_matrices_from_vecs,
     get_vecs_from_matrices,
-    vec_to_adj_matrix,
 )
 
 
@@ -82,20 +82,6 @@ class Diffuser:
 
         return mu + noise * std
 
-    def sample_vec(self, model, x_shape=(1, 64, 64)):
-        model.eval()
-        batch_size = x_shape[0]
-        x = torch.randn(x_shape, device=self.device)
-
-        for i in tqdm(range(self.num_timesteps, 0, -1)):
-            t = torch.tensor([i] * batch_size, device=self.device, dtype=torch.long)
-            x = self.denoise(model, x, t)
-
-        x = x.detach().cpu().numpy()
-        images = [vec_to_adj_matrix(vec) for vec in x]
-
-        return images
-
     def sample(self, model, x_shape=(1, 1, 64, 64), copy_tril=True):
         model.eval()
         batch_size = x_shape[0]
@@ -114,36 +100,6 @@ class Diffuser:
 
         return x
 
-    """ For MLP type model. deprecated """
-    # def sample(self, model, x_shape=(1, 2016)):
-    #     model.eval()
-    #     batch_size = x_shape[0]
-    #     x = torch.randn(x_shape, device=self.device)
-
-    #     for i in tqdm(range(self.num_timesteps, 0, -1)):
-    #         t = torch.tensor([i] * batch_size, device=self.device, dtype=torch.long)
-    #         x = self.denoise(model, x, t)
-
-    #     x = x.detach().cpu().numpy()
-    #     images = [vec_to_adj_matrix(vec) for vec in x]
-
-    #     return images
-
-    # def sample_image(self, model, x_shape=(1, 28, 28)):
-    #     model.eval()
-    #     batch_size = x_shape[0]
-    #     vec_shape = x_shape[1] * x_shape[2]
-    #     x = torch.randn((batch_size, vec_shape), device=self.device)
-
-    #     for i in tqdm(range(self.num_timesteps, 0, -1)):
-    #         t = torch.tensor([i] * batch_size, device=self.device, dtype=torch.long)
-    #         x = self.denoise(model, x, t)
-
-    #     x = x.detach().cpu().numpy()
-    #     images = x.reshape(batch_size, x_shape[1], x_shape[2])
-
-    #     return images
-
 
 def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
     """
@@ -155,66 +111,6 @@ def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
         t2 = (i + 1) / num_diffusion_timesteps
         betas.append(min(1 - alpha_bar(t2) / alpha_bar(t1), max_beta))
     return np.array(betas)
-
-
-def get_cosine_beta_schedule(num_diffusion_timesteps):
-    return betas_for_alpha_bar(
-        num_diffusion_timesteps,
-        lambda t: math.cos((t + 0.008) / 1.008 * math.pi / 2) ** 2,
-    )
-
-
-class LinearModule(nn.Module):
-    def __init__(self, input_dim: int, output_dim: int, embedding_dim: int):
-        super().__init__()
-        self.embedding_dim = embedding_dim
-
-        self.layers = nn.Sequential(
-            nn.Linear(input_dim + embedding_dim, output_dim),
-            nn.BatchNorm1d(output_dim),
-            nn.LeakyReLU(),
-            nn.Linear(output_dim, output_dim),
-        )
-
-        self.time_mlp = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim * 2),
-            nn.LeakyReLU(),
-            nn.Linear(embedding_dim * 2, embedding_dim),
-        )
-
-    def forward(self, x: torch.Tensor, t: torch.Tensor):
-        t = timestep_embedding(t, dim=self.embedding_dim)
-        t = self.time_mlp(t)
-
-        x = torch.cat([x, t], dim=1)  # Concatenate time embedding
-        x = self.layers(x)
-
-        return x
-
-
-class DiffusionModelLinear(nn.Module):
-    def __init__(
-        self, input_dim: int = 2016, hidden_dim: int = 512, latent_dim: int = 32
-    ):
-        super().__init__()
-
-        self.mlp1 = LinearModule(input_dim, hidden_dim, 128)
-        self.mlp2 = LinearModule(hidden_dim, latent_dim, 16)
-        self.mlp3 = LinearModule(latent_dim, hidden_dim, 4)
-        self.mlp4 = LinearModule(hidden_dim, input_dim, 16)
-
-        self.lastlayers = nn.Sequential(nn.Softplus())
-
-    def forward(self, x: torch.Tensor, t: torch.Tensor):
-        # x: (batch_size, input_dim)
-        h1 = self.mlp1(x, t)
-        h2 = self.mlp2(h1, t)
-        h3 = self.mlp3(h2, t)
-        h3 = h1 + h3
-        h4 = self.mlp4(h3, t)
-        h4 = self.lastlayers(h4)
-
-        return h4
 
 
 class ConvBlock(nn.Module):
@@ -441,18 +337,31 @@ Estimated Total Size (MB): 1306.14
 
 
 class DiffusionModel(nn.Module):
-    def __init__(self, input_dim: int = 1, output_dim: int = 1):
+    def __init__(
+        self, input_dim: int = 1, output_dim: int = 1, base_ch=24, embedding_dim=256
+    ):
         super().__init__()
-        base_ch = 24
-        self.cb1 = ConvBlock(input_dim, base_ch, embedding_dim=256)
-        self.cb2 = ConvBlock(base_ch, base_ch * 2, embedding_dim=256)
-        self.cb3 = ConvBlock(base_ch * 2, base_ch * 4, embedding_dim=256)
-        self.cb3_1 = ConvBlock(base_ch * 4, base_ch * 8, embedding_dim=256)
-        self.cb3_2 = ConvBlock(
-            base_ch * 8 + base_ch * 4, base_ch * 4, embedding_dim=256
+        print(
+            f"Initializing DiffusionModel: input_dim={input_dim}, output_dim={output_dim}, base_ch={base_ch}, embedding_dim={embedding_dim}"
         )
-        self.cb4 = ConvBlock(base_ch * 4 + base_ch * 2, base_ch * 2, embedding_dim=256)
-        self.cb5 = ConvBlock(base_ch * 2 + base_ch, base_ch, embedding_dim=256)
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"Initializing DiffusionModel: input_dim={input_dim}, output_dim={output_dim}, base_ch={base_ch}, embedding_dim={embedding_dim}"
+        )
+
+        self.cb1 = ConvBlock(input_dim, base_ch, embedding_dim=embedding_dim)
+        self.cb2 = ConvBlock(base_ch, base_ch * 2, embedding_dim=embedding_dim)
+        self.cb3 = ConvBlock(base_ch * 2, base_ch * 4, embedding_dim=embedding_dim)
+        self.cb3_1 = ConvBlock(base_ch * 4, base_ch * 8, embedding_dim=embedding_dim)
+        self.cb3_2 = ConvBlock(
+            base_ch * 8 + base_ch * 4, base_ch * 4, embedding_dim=embedding_dim
+        )
+        self.cb4 = ConvBlock(
+            base_ch * 4 + base_ch * 2, base_ch * 2, embedding_dim=embedding_dim
+        )
+        self.cb5 = ConvBlock(
+            base_ch * 2 + base_ch, base_ch, embedding_dim=embedding_dim
+        )
         self.last_conv = nn.Conv2d(base_ch, output_dim, kernel_size=3, padding=1)
 
         self.down1 = DownSample(base_ch)

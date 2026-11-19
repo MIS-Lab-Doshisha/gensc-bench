@@ -1,9 +1,11 @@
+import logging
+
 import torch
 from torch import nn
 from tqdm import tqdm
-import torchvision.transforms as transforms
-import numpy as np
+
 from common.graph_util import get_matrices_from_vecs, get_vecs_from_matrices
+
 
 def _pos_encoding(t, output_dim, device):
     v = torch.zeros(output_dim).to(device)
@@ -25,6 +27,7 @@ def pos_encoding(ts, output_dim, device):
 
     return v
 
+
 class ConvBlock(nn.Module):
     def __init__(self, in_ch, out_ch, time_embed_dim):
         super().__init__()
@@ -34,13 +37,11 @@ class ConvBlock(nn.Module):
             nn.ReLU(),
             nn.Conv2d(out_ch, out_ch, 3, padding=1),
             nn.BatchNorm2d(out_ch),
-            nn.ReLU()
+            nn.ReLU(),
         )
 
         self.mlp = nn.Sequential(
-            nn.Linear(time_embed_dim, in_ch),
-            nn.ReLU(),
-            nn.Linear(in_ch, in_ch)
+            nn.Linear(time_embed_dim, in_ch), nn.ReLU(), nn.Linear(in_ch, in_ch)
         )
 
     def forward(self, x, v):
@@ -177,21 +178,36 @@ Non-trainable params: 0
 =================================================================
 """
 
-class UNet(nn.Module):
-    def __init__(self, in_ch=1, base_ch=16, time_embed_dim=100):
-        super().__init__()
-        self.time_embed_dim = time_embed_dim
 
-        self.down1 = ConvBlock(in_ch, base_ch, time_embed_dim)
-        self.down2 = ConvBlock(base_ch, base_ch * 2, time_embed_dim)
-        self.down3 = ConvBlock(base_ch * 2, base_ch * 4, time_embed_dim)
-        self.down4 = ConvBlock(base_ch * 4, base_ch * 8, time_embed_dim)
-        self.bot1 = ConvBlock(base_ch * 8, base_ch * 16, time_embed_dim)
-        self.up4 = ConvBlock(base_ch * 8 + base_ch * 16, base_ch * 8, time_embed_dim)
-        self.up3 = ConvBlock(base_ch * 4 + base_ch * 8, base_ch * 4, time_embed_dim)
-        self.up2 = ConvBlock(base_ch * 2 + base_ch * 4, base_ch * 2, time_embed_dim)
-        self.up1 = ConvBlock(base_ch + base_ch * 2, base_ch, time_embed_dim)
-        self.out = nn.Conv2d(base_ch, in_ch, 1)
+class UNet(nn.Module):
+    def __init__(self, input_dim, output_dim, base_ch=16, embedding_dim=100):
+        super().__init__()
+
+        print(
+            f"Initializing UNet with input_dim={input_dim}, output_dim={output_dim}, base_ch={base_ch}, time_embed_dim={embedding_dim}"
+        )
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"Initializing UNet with input_dim={input_dim}, output_dim={output_dim}, base_ch={base_ch}, time_embed_dim={embedding_dim}"
+        )
+        self.time_embed_dim = embedding_dim
+
+        self.down1 = ConvBlock(input_dim, base_ch, self.time_embed_dim)
+        self.down2 = ConvBlock(base_ch, base_ch * 2, self.time_embed_dim)
+        self.down3 = ConvBlock(base_ch * 2, base_ch * 4, self.time_embed_dim)
+        self.down4 = ConvBlock(base_ch * 4, base_ch * 8, self.time_embed_dim)
+        self.bot1 = ConvBlock(base_ch * 8, base_ch * 16, self.time_embed_dim)
+        self.up4 = ConvBlock(
+            base_ch * 8 + base_ch * 16, base_ch * 8, self.time_embed_dim
+        )
+        self.up3 = ConvBlock(
+            base_ch * 4 + base_ch * 8, base_ch * 4, self.time_embed_dim
+        )
+        self.up2 = ConvBlock(
+            base_ch * 2 + base_ch * 4, base_ch * 2, self.time_embed_dim
+        )
+        self.up1 = ConvBlock(base_ch + base_ch * 2, base_ch, self.time_embed_dim)
+        self.out = nn.Conv2d(base_ch, output_dim, 1)
 
         self.maxpool = nn.MaxPool2d(2)
         self.maxpool_pad1 = nn.MaxPool2d(2, padding=1)
@@ -231,7 +247,9 @@ class UNet(nn.Module):
 
 
 class Diffuser:
-    def __init__(self, num_timesteps=1000, beta_start=0.0001, beta_end=0.02, device="cpu"):
+    def __init__(
+        self, num_timesteps=1000, beta_start=0.0001, beta_end=0.02, device="cpu"
+    ):
         self.num_timesteps = num_timesteps
         self.device = device
         self.betas = torch.linspace(beta_start, beta_end, num_timesteps, device=device)
@@ -240,7 +258,7 @@ class Diffuser:
 
     def add_noise(self, x_0, t):
         T = self.num_timesteps
-        assert (t >= 1).all()  and (t <= T).all()
+        assert (t >= 1).all() and (t <= T).all()
         t_idx = t - 1
 
         alpha_bar = self.alpha_bars[t_idx]
@@ -254,7 +272,7 @@ class Diffuser:
 
     def denoise(self, model, x, t):
         T = self.num_timesteps
-        assert (t >= 1).all()  and (t <= T).all()
+        assert (t >= 1).all() and (t <= T).all()
 
         t_idx = t - 1
         alpha = self.alphas[t_idx]
@@ -279,12 +297,7 @@ class Diffuser:
 
         return mu + noise * std
 
-    def reverse_to_img(self, x):
-        x = x.clamp(0, 255)
-        x = x.to(torch.uint8)
-        to_pil = transforms.ToPILImage()
-        return to_pil(x)
-
+    @torch.no_grad()
     def sample(self, model, x_shape=(4, 1, 116, 116), chunk_size=250):
         batch_size, _, n, _ = x_shape
         all_matrices = []
@@ -296,7 +309,9 @@ class Diffuser:
             current_batch_size = x.shape[0]
 
             for i in tqdm(range(self.num_timesteps, 0, -1)):
-                t = torch.tensor([i] * current_batch_size, device=self.device, dtype=torch.long)
+                t = torch.tensor(
+                    [i] * current_batch_size, device=self.device, dtype=torch.long
+                )
                 with torch.no_grad():
                     x = self.denoise(model, x, t)
 
@@ -312,21 +327,21 @@ class Diffuser:
 
         return final_matrices
 
-    def sample_vec(self, model, x=None, x_shape=(4, 1, 116, 116)):
-        batch_size = x_shape[0]
+    # def sample_vec(self, model, x=None, x_shape=(4, 1, 116, 116)):
+    #     batch_size = x_shape[0]
 
-        if x == None:
-            x = torch.randn(x_shape, device=self.device)
+    #     if x is None:
+    #         x = torch.randn(x_shape, device=self.device)
 
-        for i in tqdm(range(self.num_timesteps, 0, -1)):
-            t = torch.tensor([i] * batch_size, device=self.device, dtype=torch.long)
-            x = self.denoise(model, x, t)
+    #     for i in tqdm(range(self.num_timesteps, 0, -1)):
+    #         t = torch.tensor([i] * batch_size, device=self.device, dtype=torch.long)
+    #         x = self.denoise(model, x, t)
 
-        x = x.squeeze().cpu()
-        vecs = get_vecs_from_matrices(x)
+    #     x = x.squeeze().cpu()
+    #     vecs = get_vecs_from_matrices(x)
 
-        # 最小値を0にする
-        torch.clamp(vecs, min=0) # type: ignore
+    # # Set the minimum value to zero.
+    #     vecs = torch.clamp(vecs, min=0)  # type: ignore
 
-        images = vecs.numpy()
-        return images
+    #     images = vecs.numpy()
+    #     return images

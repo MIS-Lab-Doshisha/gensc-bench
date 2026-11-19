@@ -3,35 +3,11 @@ import subprocess as sp
 
 import networkx as nx
 import numpy as np
-import pandas as pd
 from joblib import Parallel, delayed
 from scipy.linalg import eigvalsh
 
-import eval.mmd as mmd
-from common.graph_util import get_top_n_edges, matrix_to_vec
+import eval.core.mmd_gpu as mmd
 
-
-
-
-def create_df_from_mmd_dict(data_for_mmd, metric_name):
-    """
-    Creates a DataFrame for a specified metric from an MMD calculation dictionary.
-    """
-    df_list = []
-    # Add data for target networks
-    if "target" in data_for_mmd[metric_name]:
-        for val in data_for_mmd[metric_name]["target"]:
-            df_list.append({"Network": "Target", "Metric Value": val})
-
-    # Add data for reconstructed networks
-    if "recon" in data_for_mmd[metric_name]:
-        for val in data_for_mmd[metric_name]["recon"]:
-            df_list.append({"Network": "Recon", "Metric Value": val})
-
-    return pd.DataFrame(df_list)
-
-
-# Parts of the code below and all files within the Orca directory are derived from https://github.com/JiaxuanYou/graph-generation.
 """ Degree """
 
 
@@ -67,7 +43,7 @@ def degree_stats(graph_ref_list, graph_pred_list, is_parallel=False):
     return mmd_dist
 
 
-""" Clustering Coefficient """
+"""Clustering Coefficient"""
 
 
 def clustering_worker(graph, bins):
@@ -102,7 +78,7 @@ def clustering_stats(graph_ref_list, graph_pred_list, bins=100, is_parallel=True
     return mmd_dist
 
 
-""" Orbit """
+"""orbit"""
 motif_to_indices = {
     "3path": [1, 2],
     "4cycle": [8],
@@ -127,8 +103,7 @@ def orca(graph):
     tmp_fname = "eval/orca/tmp.txt"
     f = open(tmp_fname, "w")
     f.write(str(graph.number_of_nodes()) + " " + str(graph.number_of_edges()) + "\n")
-    for u, v in edge_list_reindexed(graph):
-        f.write(str(u) + " " + str(v) + "\n")
+    f.writelines(str(u) + " " + str(v) + "\n" for u, v in edge_list_reindexed(graph))
     f.close()
 
     output = sp.check_output(
@@ -187,13 +162,14 @@ def orbit_stats_all(graph_ref_list, graph_pred_list):
     return mmd_dist
 
 
-""" Spectral """
+"""Spectral"""
 
 
 def spectral_worker(G, n_eigvals=-1):
     G_main = G.copy()
     G_main.remove_nodes_from(list(nx.isolates(G_main)))
 
+    # Skip graphs with fewer than two nodes.
     if G_main.number_of_nodes() < 2:
         return np.zeros(200)
 
@@ -213,21 +189,21 @@ def spectral_stats(
     graph_ref_list, graph_pred_list, is_parallel=True, n_eigvals=-1, compute_emd=False
 ):
     """
-    Computes the MMD between the spectral distributions (eigenvalue histograms) of two sets of graphs.
+    Compute the MMD between the spectral distributions (eigenvalue histograms) of two sets of graphs.
 
     Args:
-        graph_ref_list (list): List of reference graphs (NetworkX objects).
-        graph_pred_list (list): List of generated graphs (NetworkX objects).
-        is_parallel (bool): Flag to enable parallel processing.
-        n_eigvals (int): Number of eigenvalues to use. -1 uses all.
-        compute_emd (bool): (Currently unused in this function, but kept for interface consistency)
+        graph_ref_list (list): Reference graphs as NetworkX objects.
+        graph_pred_list (list): Generated graphs as NetworkX objects.
+        is_parallel (bool): Whether to enable parallel processing.
+        n_eigvals (int): Number of eigenvalues to use. Use -1 to include all eigenvalues.
+        compute_emd (bool): Unused here. Kept for interface consistency.
     """
     graph_pred_list_remove_empty = [
         G for G in graph_pred_list if G.number_of_nodes() > 0
     ]
 
     def process_graph_list(graph_list):
-        """Applies spectral_worker to a list of graphs and returns a list of PMFs."""
+        """Apply spectral_worker to each graph and return a list of PMFs."""
         if is_parallel:
             return Parallel(n_jobs=-1)(
                 delayed(spectral_worker)(G, n_eigvals) for G in graph_list
@@ -243,46 +219,10 @@ def spectral_stats(
     return mmd_dist
 
 
-
-
-def weight_worker(matrix):
-    lower = matrix_to_vec(matrix)
-    weights = lower[lower > 0]
-    return weights
-
-
-def weight_stats(matrix_ref_list, matrix_pred_list, is_parallel=True):
-    """
-    Calculate the Maximum Mean Discrepancy (MMD) between weights of two lists of weighted graph matrices.
-
-    Parameters:
-        matrix_ref_list (list): A list of reference matrices to compare against.
-        matrix_pred_list (list): A list of predicted matrices to compare.
-        is_parallel (bool): If True, processes the matrices in parallel. Defaults to True.
-
-    Returns:
-        float: The computed MMD distance between the reference and predicted matrices.
-    """
-    matrix_pred_list_remove_empty = [m for m in matrix_pred_list if m.sum() > 0]
-
-    def process_matrix_list(matrix_list):
-        if is_parallel:
-            return Parallel(n_jobs=-1)(delayed(weight_worker)(G) for G in matrix_list)
-        else:
-            return [weight_worker(G) for G in matrix_list]
-
-    sample_ref = process_matrix_list(matrix_ref_list)
-    sample_pred = process_matrix_list(matrix_pred_list_remove_empty)
-
-    mmd_dist = mmd.compute_mmd(sample_ref, sample_pred)
-
-    return mmd_dist
-
-
 def strength_worker(matrix):
     """
-    Worker function to calculate the strength of each node from a matrix.
-    Strength is calculated as the sum of each row in the matrix.
+    Compute the node strengths from a weighted adjacency matrix.
+    Each node's strength is the sum of its row in the matrix.
     """
     strengths = np.sum(matrix, axis=1)
     return strengths[strengths > 0]
@@ -290,15 +230,16 @@ def strength_worker(matrix):
 
 def strength_stats(matrix_ref_list, matrix_pred_list, is_parallel=True):
     """
-    Calculate the Maximum Mean Discrepancy (MMD) between node strengths of two lists of weighted graph matrices.
+    Compute the maximum mean discrepancy (MMD) between the node strength
+    distributions of two lists of weighted adjacency matrices.
 
     Parameters:
-        matrix_ref_list (list): A list of reference matrices to compare against.
-        matrix_pred_list (list): A list of predicted matrices to compare.
-        is_parallel (bool): If True, processes the matrices in parallel. Defaults to True.
+        matrix_ref_list (list): Reference adjacency matrices.
+        matrix_pred_list (list): Predicted adjacency matrices.
+        is_parallel (bool): Enable parallel processing when True. Defaults to True.
 
     Returns:
-        float: The computed MMD distance between the strength distributions of the reference and predicted matrices.
+        float: MMD between the reference and predicted node strength distributions.
     """
     matrix_pred_list_remove_empty = [m for m in matrix_pred_list if m.sum() > 0]
 

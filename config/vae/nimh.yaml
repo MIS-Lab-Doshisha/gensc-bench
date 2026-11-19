@@ -1,0 +1,25 @@
+dataset:
+  type: sc
+  size: 6670
+
+model:
+  max_hidden_dim: 3335
+  min_hidden_dim: 512
+  input_dim: 6670
+
+training:
+  batch_size: 20
+  num_epoch_optim: 500
+  num_epoch_final: 2000
+  n_trials: 100
+  seed: 42
+  runs:
+    - seed: 43
+      fold: 1
+    - seed: 44
+      fold: 2
+    - seed: 45
+      fold: 3
+
+output:
+  path: checkpoints/fix/nimh/vae

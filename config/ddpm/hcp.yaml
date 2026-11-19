@@ -1,0 +1,27 @@
+dataset:
+  type: sc
+  size: 116
+
+model:
+  timesteps: 1000
+  input_dim: 1
+  output_dim: 1
+  embedding_dim: 256
+
+training:
+  batch_size: 64
+  sampling_chunk_size: 250
+  n_trials: 100
+  num_epoch_optim: 500
+  num_epoch_final: 1000
+  seed: 42
+  runs:
+  - seed: 43
+    fold: 1
+  - seed: 44
+    fold: 2
+  - seed: 45
+    fold: 3
+
+output:
+  path: checkpoints/fix/hcp/ddpm

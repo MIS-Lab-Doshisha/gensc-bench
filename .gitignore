@@ -223,12 +223,8 @@ __marimo__/
 *.png
 *.jpg
 *.pdf
-!images/
-!images/**
 
+data/sc/sc_all.npz
 *.h5
-*.npz
-output/**/*.csv
-
 .DS_Store
 

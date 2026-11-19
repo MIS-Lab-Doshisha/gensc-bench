@@ -1,0 +1,27 @@
+dataset:
+  type: sc
+
+model:
+  max_hidden_dim: 512
+  min_hidden_dim: 128
+  input_dim: 6670
+  output_dim: 6670
+
+training:
+  batch_size: 64
+  n_critic: 3
+  gp_weight: 10.0
+  num_epoch_optim: 500
+  num_epoch_final: 1000
+  n_trials: 100
+  seed: 42
+  runs:
+  - seed: 43
+    fold: 1
+  - seed: 44
+    fold: 2
+  - seed: 45
+    fold: 3
+
+output:
+  path: checkpoints/fix/hcp/gan

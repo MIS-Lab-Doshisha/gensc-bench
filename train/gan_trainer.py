@@ -1,13 +1,16 @@
 import json
+import os
+import time
+from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 import optuna
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.autograd import grad
 from torch.utils.data import DataLoader
 
@@ -15,11 +18,18 @@ from common.graph_util import get_vecs_from_matrices
 from common.util import (
     extract_tensor_from_dataloaders,
     plot_losses,
-    plot_matrix_grid,
+    set_seed,
+    setup_logger,
 )
-from eval.mmd import compute_mmd
+from common.visualize import plot_matrix_grid
+
+# from eval.mmd import compute_mmd
+from eval.core.mmd_gpu import compute_mmd
 from gen.generation import generate_graphs_with_gan
-from train.common import EarlyStopping, filter_params
+from train.common import (
+    EarlyStopping,
+    filter_params,
+)
 
 
 class GanTrainer:
@@ -35,7 +45,8 @@ class GanTrainer:
         num_epochs: int = 100,
         seed: int = 42,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
-        output_dir: str | None = None,
+        output_dir: str | os.PathLike | None = None,
+        logger: Any = None,
     ):
         self.gp_weight = gp_weight
         self.lr_critic = lr_critic
@@ -46,15 +57,10 @@ class GanTrainer:
         self.seed = seed
         self.device = device
         self.output_dir = output_dir
+        self.logger = logger
 
         self.generator = generator.to(self.device)
         self.critic = critic.to(self.device)
-
-        # self.hparams = {
-        #     "latent_dim": self.generator.latent_dim,
-        #     "lr_critic": self.lr_critic,
-        #     "lr_generator": self.lr_generator,
-        # }
 
         self.optimizer_critic = torch.optim.Adam(
             self.critic.parameters(), lr=self.lr_critic, betas=(0.0, 0.9)
@@ -62,6 +68,19 @@ class GanTrainer:
         self.optimizer_generator = torch.optim.Adam(
             self.generator.parameters(), lr=self.lr_generator, betas=(0.0, 0.9)
         )
+
+        if self.seed is not None:
+            set_seed(self.seed)
+
+        self.log(
+            f"Initialized GAN Trainer with {self.n_critic} critic steps, lr_critic: {self.lr_critic}, lr_generator: {self.lr_generator}"
+        )
+
+    def log(self, message: str):
+        if self.logger:
+            self.logger.info(message)
+        else:
+            print(message)
 
     def critic_train_step(self, data_loader: DataLoader):
         self.generator.eval()
@@ -99,7 +118,7 @@ class GanTrainer:
         fake_scores /= len(data_loader)
         real_scores /= len(data_loader)
         gradient_penalty /= len(data_loader)
-        print(
+        self.log(
             f"TRAIN fake score: {fake_scores:.4f}, real score: {real_scores:.4f}, gradient penalty: {gradient_penalty:.4f}"
         )
 
@@ -166,19 +185,26 @@ class GanTrainer:
         fake_scores /= len(data_loader)
         real_scores /= len(data_loader)
         total_gradient_penalty /= len(data_loader)
-        print(
+        self.log(
             f"VAL fake score: {fake_scores:.4f}, real score: {real_scores:.4f}, gradient penalty: {total_gradient_penalty:.4f}"
         )
 
         return avg_loss
 
     def train(self, train_dataloader, val_dataloader):
+        if self.device == "cuda":
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.synchronize()
+
         critic_train_losses = []
         generator_train_losses = []
         critic_val_losses = []
         mmds = []
 
         early_stopping = EarlyStopping(patience=30, window_size=5)
+
+        start_time = time.perf_counter()
 
         for epoch in range(self.num_epochs):
             # train critic
@@ -198,7 +224,7 @@ class GanTrainer:
             critic_val_loss = self.critic_val_step(val_dataloader, epoch)
             critic_val_losses.append(critic_val_loss)
 
-            print(
+            self.log(
                 f"Epoch [{epoch + 1}/{self.num_epochs}], Critic Train Loss: {critic_loss:.4f},  Gen Train Loss: {generator_loss:.4f}, Critic Val Loss: {critic_val_loss:.4f}"
             )
 
@@ -208,20 +234,40 @@ class GanTrainer:
                 )
                 plot_matrix_grid(
                     generated,
-                    output_path_name=f"{self.output_dir}/wba_dence_{epoch + 1}",
+                    output_path_name=f"{self.output_dir}/intermediate_{epoch + 1}",
                 )
 
             mmd = self.eval_objective(val_dataloader)
             mmds.append(mmd)
-            print(f"Epoch [{epoch + 1}/{self.num_epochs}], MMD on val set: {mmd:.4f}")
+            self.log(
+                f"Epoch [{epoch + 1}/{self.num_epochs}], MMD on val set: {mmd:.4f}"
+            )
 
             if early_stopping(mmd):
-                print(f"Early stopping at epoch {epoch + 1}")
+                self.log(f"Early stopping at epoch {epoch + 1}")
                 break
             if self.output_dir is not None and early_stopping.save_model:
                 torch.save(
                     self.generator.state_dict(), Path(self.output_dir) / "model.pth"
                 )
+
+        if self.device == "cuda":
+            torch.cuda.synchronize()
+
+        training_time = time.perf_counter() - start_time
+
+        if self.device == "cuda":
+            peak_memory = torch.cuda.max_memory_allocated() / (1024**2)  # in MiB
+
+            self.log(f"Training completed in {training_time:.4f} seconds.")
+            self.log(f"Peak GPU memory usage: {peak_memory:.4f} MiB")
+        else:
+            self.log(f"Training completed in {training_time:.4f} seconds.")
+
+        self.critic_train_losses = critic_train_losses
+        self.generator_train_losses = generator_train_losses
+        self.critic_val_losses = critic_val_losses
+        self.mmds = mmds
 
         return critic_train_losses, generator_train_losses, critic_val_losses, mmds
 
@@ -279,28 +325,31 @@ def gan_objective(
     trial: optuna.Trial,
     train_dataloader: DataLoader,
     val_dataloader: DataLoader,
+    config: dict,
     GeneratorClass: type[nn.Module],
     CriticClass: type[nn.Module],
     get_params_func: Callable,
     input_dim: int,
-    num_epochs_optim: int,
 ) -> float:
-    params = get_params_func(trial)
+    fixed_params = config.get("model", {})
+    optim_params = get_params_func(trial)
+    params = {**fixed_params, **optim_params}
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     generator_params = filter_params(params, GeneratorClass)
     critic_params = filter_params(params, CriticClass)
     trainer_params = filter_params(params, GanTrainer)
 
-    generator = GeneratorClass(**generator_params, output_dim=input_dim)
-    critic = CriticClass(**critic_params, input_dim=input_dim)
+    set_seed(config["training"]["seed"])
+
+    generator = GeneratorClass(**generator_params)
+    critic = CriticClass(**critic_params)
 
     trainer = GanTrainer(
         generator=generator,
         critic=critic,
         **trainer_params,
-        num_epochs=num_epochs_optim,
-        seed=42,
+        num_epochs=config["training"]["num_epoch_optim"],
         device=device,
     )
 
@@ -314,20 +363,13 @@ def gan_objective(
 def optimize_gan(
     train_loader,
     val_loader,
+    config: dict,
     GeneratorClass: type,
     CriticClass: type,
     get_params_func: Callable,
     input_dim: int,
     output_dir: str,
-    n_trials: int = 100,
-    num_epochs_optim: int = 500,
 ) -> dict[str, Any]:
-    # optuna.logging.disable_default_handler()
-    # optuna.logging.set_verbosity(optuna.logging.INFO)
-    # logging.getLogger("optuna").setLevel(logging.INFO)
-
-    # log_file_path = f"{output_dir}/gan_optuna_study.log"
-    # setup_logger("optuna", log_file_path, mode="w")
 
     objective_func = partial(
         gan_objective,
@@ -337,12 +379,16 @@ def optimize_gan(
         CriticClass=CriticClass,
         get_params_func=get_params_func,
         input_dim=input_dim,
-        num_epochs_optim=num_epochs_optim,
+        config=config,
     )
     study = optuna.create_study(
-        direction="minimize", sampler=optuna.samplers.TPESampler(seed=1)
+        direction="minimize",
+        sampler=optuna.samplers.TPESampler(seed=1),
+        study_name="gan_optimization",
+        storage=f"sqlite:///{output_dir}/gan_optuna_study.db",
+        load_if_exists=True,
     )
-    study.optimize(objective_func, n_trials=n_trials)
+    study.optimize(objective_func, n_trials=config["training"]["n_trials"])
 
     print("Best trial:")
     trial = study.best_trial
@@ -371,46 +417,53 @@ def optimize_gan(
 def optimize_and_train_gan(
     train_loader: DataLoader,
     val_loader: DataLoader,
+    config: dict,
     GeneratorClass: type,
     CriticClass: type,
     get_params_func: Callable,
     output_dir: str,
     input_dim=2016,
-    n_trials: int = 100,
-    num_epochs_optim: int = 500,
-    num_epochs_final: int = 1000,
 ):
+    output_dir_path = Path(output_dir)
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    num_epochs_final = config["training"]["num_epoch_final"]
     best_params = optimize_gan(
         train_loader,
         val_loader,
+        config=config,
         output_dir=output_dir,
         GeneratorClass=GeneratorClass,
         CriticClass=CriticClass,
         get_params_func=get_params_func,
         input_dim=input_dim,
-        n_trials=n_trials,
-        num_epochs_optim=num_epochs_optim,
     )
 
-    with open(Path(output_dir) / "best_params.json", "w") as f:
+    with open(output_dir_path / "best_params.json", "w") as f:
         json.dump(best_params, f)
 
     generator_params = filter_params(best_params, GeneratorClass)
     critic_params = filter_params(best_params, CriticClass)
     trainer_params = filter_params(best_params, GanTrainer)
 
+    final_training_output_dir = output_dir_path / "run_0"
+
+    set_seed(config["training"]["seed"])
+
     generator = GeneratorClass(**generator_params, output_dim=input_dim)
     critic = CriticClass(**critic_params, input_dim=input_dim)
 
+    logger = setup_logger(
+        log_file=f"{final_training_output_dir}/gan_trainer.log",
+    )
     trainer = GanTrainer(
         generator=generator,
         critic=critic,
         **trainer_params,
         num_epochs=num_epochs_final,
-        seed=42,
+        seed=config["training"]["seed"],
         device=device,
-        output_dir=output_dir,
+        output_dir=final_training_output_dir,
+        logger=logger,
     )
 
     losses = trainer.train(train_loader, val_loader)
@@ -421,7 +474,7 @@ def optimize_and_train_gan(
             "Generator train loss": losses[1],
             "Critic validation loss": losses[2],
         },
-        output_dir=output_dir,
+        output_dir=final_training_output_dir,
     )
 
     return best_params, trainer

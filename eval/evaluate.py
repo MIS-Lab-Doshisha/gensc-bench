@@ -1,78 +1,71 @@
 import argparse
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
+import yaml
 
 from common.graph_util import get_topn_adj_list
-from common.path_manager import PathManager
 from common.util import (
-    extract_tensor_from_dataloaders,
-    get_reconstruction_from_npz,
     setup_logger,
 )
-from dataset.graph_dataset import GraphDataset, create_dataloaders, get_dataloaders
-from eval.eval_func import (
-    evaluate_graphs,
-    get_best_thresholded_matrices,
-    get_planarity_rate,
+from eval.core.graph_mmd import strength_stats
+from eval.core.graph_statistics import get_planarity_rate
+from eval.core.iteration import iter_evaluation_targets
+from eval.jobs.eval_jobs import evaluate_graphs
+from eval.jobs.metrics_jobs import (
+    compute_modularities,
+    get_and_plot_jaccard,
+    get_strength_spearman,
 )
-from eval.graph_mmd import strength_stats
-from eval.plot import plot_mean_matrices
+from eval.jobs.nearest_neighbor import evaluate_graph_nns, evaluate_pairwise_distances
+from eval.jobs.threshold import save_all_thresholded_matrices
 
 
-def thresh():
-    manager = PathManager("path_list.json")
-    keys = manager.get_all_keys()
-    logger = setup_logger("thresh", "log/thresh.log")
+def eval_mmds(path_config, datasets):
+    ouput_dir = Path(path_config["roots"]["output"]) / "mmd_results"
+    ouput_dir.mkdir(parents=True, exist_ok=True)
+    logger = setup_logger(log_file=f"{ouput_dir}/eval_mmds.log")
 
-    for key in keys:
-        target_path = manager.get_original_path(key)
-        target = get_reconstruction_from_npz(target_path)
-        recons = (Path("checkpoints/artificial") / key).rglob("generated_graphs.npz")
-        for recon_path in recons:
-            recon = get_reconstruction_from_npz(recon_path)
-            logger.info(f"Processing {target_path} and {recon_path}")
-
-            thresh = np.linspace(0.1, 0.49, 40)
-            thresh = np.round(thresh, decimals=2)
-            matrices = get_best_thresholded_matrices(target, recon, thresh_list=thresh)
-
-            save_path = Path("output/thresholded") / key / recon_path.parent.name
-            save_path.mkdir(parents=True, exist_ok=True)
-            np.savez_compressed(save_path / "generated_graphs.npz", matrices)
-
-
-def eval_mmds():
-    logger = setup_logger("eval", "log/evaluation.log", mode="a")
-    manager = PathManager("processed_path_list.json")
-
-    keys = manager.get_all_keys()
-
-    for key in keys:
-        original = manager.get_original_path(key)
-        csv_path = f"output/mmd_results/{key}_mmds.csv"
-        dataset = GraphDataset(original)
-        train, val, test = get_dataloaders(dataset)
-        ref = extract_tensor_from_dataloaders([test]).numpy()
+    for dataset in datasets:
+        csv_path = f"{path_config['roots']['output']}/mmd_results/{dataset}_mmds.csv"
+        ref = None
 
         results = []
-        pathlists = manager.get_all_recon_paths(key)
 
-        for path in pathlists:
-            logger.info(f"Evaluating graphs from: {original}, {path}")
-            generated = get_reconstruction_from_npz(path)
-            mmds = evaluate_graphs(ref, generated, logger)
-            row_data = {"Model": Path(path).parent.name.upper()}
+        for target in iter_evaluation_targets(path_config, [dataset]):
+            if ref is None:
+                ref = target.ref
 
-            row_data.update(mmds)
+            logger.info(
+                f"Evaluating dataset: {target.dataset}, model: {target.model}, run: {target.run}"
+            )
 
-            results.append(row_data)
+            if not path_config["datasets"][dataset]["thresholding"]:
+                top_n_edges = [0.05, 0.1, 0.15, 0.2, 0.3]
+            else:
+                top_n_edges = [None]
+
+            generated = target.generated
+
+            for top_n in top_n_edges:
+                mmds = evaluate_graphs(ref, generated, logger, top_n_edges=top_n)
+                row_data = {"Model": target.model.upper(), "Run": target.run}
+
+                if top_n is not None:
+                    row_data["Top n Edges"] = top_n
+
+                row_data.update(mmds)
+                results.append(row_data)
 
         df = pd.DataFrame(results)
         columns = [
             "Model",
-            "Top n Edges",
+            "Run",
+        ]
+        if not path_config["datasets"][dataset]["thresholding"]:
+            columns.append("Top n Edges")
+
+        columns += [
             "Degree MMD",
             "Clustering MMD",
             "Orbit MMD",
@@ -84,99 +77,129 @@ def eval_mmds():
         print(f"Saved evaluation results to {csv_path}")
 
 
-def eval_strength_mmd():
-    manager = PathManager("processed_path_list.json")
-    keys = ["sc"]
-
-    for key in keys:
-        csv_path = f"output/mmd_results/{key}_mmds.csv"
+def eval_strength_mmd(path_config, datasets):
+    for dataset in datasets:
+        use_topn = not path_config["datasets"][dataset]["thresholding"]
+        csv_path = f"{path_config['roots']['output']}/mmd_results/{dataset}_mmds.csv"
         df = pd.read_csv(csv_path)
         all_data = []
-        train, val, test = create_dataloaders(key)
-        test_data = extract_tensor_from_dataloaders([test]).numpy()
+        test_data = None
 
-        models = manager.get_all_models(key)
-        for model in models:
-            recon_path = manager.get_recon_path(key, model)
-            recon_data = get_reconstruction_from_npz(recon_path)
+        for target in iter_evaluation_targets(path_config, [dataset]):
+            if test_data is None:
+                test_data = target.ref
 
-            if key == "sc":
-                topns = [0.05, 0.1, 0.2, 0.3]
+            if use_topn:
+                topns = [0.05, 0.1, 0.15, 0.2, 0.3]
                 for top_n in topns:
                     test_data_thresh = get_topn_adj_list(test_data, top_n=top_n)
-                    recon_data = get_topn_adj_list(recon_data, top_n=top_n)
-                    mmds = strength_stats(test_data_thresh, recon_data)
+                    recon_data_thresh = get_topn_adj_list(target.generated, top_n=top_n)
+                    mmds = strength_stats(test_data_thresh, recon_data_thresh)
                     all_data.append(
-                        {"Model": model.upper(), "Top N": top_n, "Strength MMD": mmds}
+                        {
+                            "Model": target.model.upper(),
+                            "Run": target.run,
+                            "Top n Edges": top_n,
+                            "Strength MMD": mmds,
+                        }
                     )
                     print(
-                        f"Dataset: {key}, Model: {model}, Top N: {top_n}, Strength MMD: {mmds}"
+                        f"Dataset: {dataset}, Model: {target.model}, Run: {target.run}, Top n Edges: {top_n}, Strength MMD: {mmds}"
                     )
             else:
-                mmds = strength_stats(test_data, recon_data)
-                all_data.append({"Model": model.upper(), "Strength MMD": mmds})
-                print(f"Dataset: {key}, Model: {model}, Strength MMD: {mmds}")
+                mmds = strength_stats(test_data, target.generated)
+                all_data.append(
+                    {
+                        "Model": target.model.upper(),
+                        "Run": target.run,
+                        "Top n Edges": None,
+                        "Strength MMD": mmds,
+                    }
+                )
+                print(
+                    f"Dataset: {dataset}, Model: {target.model}, Run: {target.run}, Strength MMD: {mmds}"
+                )
 
         strength_df = pd.DataFrame(all_data)
-        if key == "sc":
-            merge_keys = ["Model", "Top N"]
+        if use_topn:
+            merge_keys = ["Model", "Top n Edges", "Run"]
         else:
-            merge_keys = ["Model"]
+            merge_keys = ["Model", "Run"]
 
         try:
             df = df.merge(strength_df, how="left", on=merge_keys)
         except Exception as e:
-            print(f"Error merging strength MMDs for dataset {key}: {e}")
+            print(f"Error merging strength MMDs for dataset {dataset}: {e}")
             continue
 
-        df.to_csv(f"{csv_path}_w", mode="w", index=False)
-        print(f"Saved updated MMD results with Strength MMD to {csv_path}_w")
+        df.to_csv(f"{csv_path}", mode="w", index=False)
+        print(f"Saved updated MMD results with Strength MMD to {csv_path}")
 
 
-def eval_mean():
-    manager = PathManager("processed_path_list.json")
-    keys = manager.get_all_keys()
+def eval_planarity(path_config, datasets):
+    for dataset in datasets:
+        csv_path = f"{path_config['roots']['output']}/mmd_results/{dataset}_mmds.csv"
 
-    for key in keys:
-        train, val, test = create_dataloaders(key)
-        test_data = extract_tensor_from_dataloaders([test]).numpy()
+        df = pd.read_csv(csv_path)
+        all_data = []
 
-        data_dict = {}
-        models = manager.get_all_models(key)
-        for model in models:
-            recon_path = manager.get_recon_path(key, model)
-            recon_data = get_reconstruction_from_npz(recon_path)
+        for target in iter_evaluation_targets(path_config, [dataset]):
+            print(
+                f"Evaluating dataset: {target.dataset}, model: {target.model}, run: {target.run}"
+            )
 
-            data_dict[model.upper()] = recon_data
+            planarity = get_planarity_rate(target.generated)
 
-        plot_mean_matrices(
-            test_data, data_dict, output_path=f"output/mean_matrices/{key}_mean.pdf"
-        )
+            all_data.append(
+                {
+                    "Model": target.model.upper(),
+                    "Run": target.run,
+                    "Planarity Rate": planarity,
+                }
+            )
+
+            print(
+                f"Dataset: {dataset}, Model: {target.model}, Run: {target.run}, "
+                f"Planarity Rate: {planarity:.4f}"
+            )
+
+        planarity_df = pd.DataFrame(all_data)
+
+        try:
+            df = df.merge(planarity_df, how="left", on=["Model", "Run"])
+        except Exception as e:
+            print(f"Error merging planarity rates for dataset {dataset}: {e}")
+            continue
+
+        df.to_csv(f"{csv_path}", mode="w", index=False)
+        print(f"Saved updated MMD results with Planarity Rate to {csv_path}")
 
 
-def eval_planarity():
-    manager = PathManager("processed_path_list.json")
-    key = "planar"
-    models = manager.get_all_models(key)
+def thresh(path_config, datasets):
+    save_all_thresholded_matrices(path_config, datasets)
 
-    all_data = []
 
-    for model in models:
-        recon_path = manager.get_recon_path(key, model)
-        recon_data = get_reconstruction_from_npz(recon_path)
+def nearest_neighbor(path_config, datasets):
+    evaluate_graph_nns(path_config, datasets)
 
-        planarity = get_planarity_rate(recon_data)
-        print(f"Dataset: {key}, Model: {model}, Planarity Rate: {planarity:.4f}")
 
-        all_data.append({"Model": model.upper(), "Planarity Rate": planarity})
-
-    df = pd.DataFrame(all_data)
-    csv_path = "output/mmd_results/planarity_rates.csv"
-    df.to_csv(csv_path, mode="w", index=False)
+def pairwise_distances(path_config, datasets):
+    evaluate_pairwise_distances(path_config, datasets)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--path_config",
+        default="config/paths.yaml",
+        help="Path to the path configuration YAML file",
+    )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        default=None,
+        help="Datasets to evaluate. If omitted, all datasets will be evaluated.",
+    )
     parser.add_argument(
         "--mmds", action="store_true", help="Evaluate MMDs for generated graphs"
     )
@@ -184,23 +207,58 @@ if __name__ == "__main__":
         "--thresh", action="store_true", help="Threshold generated graphs"
     )
     parser.add_argument(
-        "--mean", action="store_true", help="Plot mean adjacency matrices"
-    )
-    parser.add_argument(
         "--strength", action="store_true", help="Evaluate Strength MMDs"
     )
+    parser.add_argument("--modularity", action="store_true", help="Evaluate Modularity")
     parser.add_argument(
         "--planarity", action="store_true", help="Evaluate Planarity Rates"
     )
+    parser.add_argument(
+        "--hub", action="store_true", help="Evaluate Hub Spearman Correlation"
+    )
+    parser.add_argument(
+        "--jaccard", action="store_true", help="Evaluate Jaccard Similarity"
+    )
+    parser.add_argument(
+        "--nn", action="store_true", help="Evaluate Nearest Neighbor Distances"
+    )
+    parser.add_argument(
+        "--pdist", action="store_true", help="Evaluate Pairwise Distances"
+    )
+    args = parser.parse_args()
+
+    with open(args.path_config, "r") as f:
+        path_config = yaml.safe_load(f)
+
+    all_datasets = path_config["datasets"].keys()
+    if args.datasets is None:
+        datasets = all_datasets
+    else:
+        unknown_datasets = set(args.datasets) - set(all_datasets)
+        if unknown_datasets:
+            raise ValueError(
+                f"Unknown datasets specified: {', '.join(unknown_datasets)}. "
+                f"Available datasets are: {', '.join(all_datasets)}"
+            )
+
+        datasets = args.datasets
 
     args = parser.parse_args()
     if args.mmds:
-        eval_mmds()
+        eval_mmds(path_config, datasets)
     if args.thresh:
-        thresh()
-    if args.mean:
-        eval_mean()
+        thresh(path_config, datasets)
     if args.strength:
-        eval_strength_mmd()
+        eval_strength_mmd(path_config, datasets)
+    if args.modularity:
+        compute_modularities(path_config, datasets)
     if args.planarity:
-        eval_planarity()
+        eval_planarity(path_config, datasets)
+    if args.hub:
+        get_strength_spearman(path_config, datasets)
+    if args.jaccard:
+        get_and_plot_jaccard(path_config, datasets)
+    if args.nn:
+        nearest_neighbor(path_config, datasets)
+    if args.pdist:
+        pairwise_distances(path_config, datasets)

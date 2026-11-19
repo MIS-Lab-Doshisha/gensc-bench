@@ -1,8 +1,11 @@
+import glob
 import random
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import networkx as nx
 import numpy as np
+import pandas as pd
 import torch
 
 from common.graph_util import matrix_to_vec
@@ -10,31 +13,31 @@ from common.util import set_seed
 from dataset.gen_graph import weighted_barabasi_albert_graph
 
 """
-Sort graph nodes and return adjacency matrix.
+sort graph nodes and return adjacency matrix
 """
 
 
 def get_bfs_ordered_adjacency_matrix(graph, start_node=None):
     """
-    Returns the adjacency matrix of a given graph with nodes reordered by BFS traversal.
+    Return the adjacency matrix with nodes ordered by breadth-first search (BFS).
 
     Args:
-        graph (nx.Graph): A NetworkX graph object.
-        start_node: The starting node for BFS. If None, a random node is chosen.
+        graph (nx.Graph): NetworkX graph.
+        start_node: Starting node for BFS. If None, select a node at random.
 
     Returns:
-        np.ndarray: The BFS-ordered adjacency matrix.
-        list: The new order of nodes determined by BFS.
+        np.ndarray: Adjacency matrix in BFS order.
+        list: Nodes in BFS order.
     """
     if start_node is None:
         start_node = sorted(list(graph.nodes()))[0]
-        print(f"BFS starting node: {start_node} (randomly selected)")
+        print(f"BFS start node: {start_node} (randomly selected)")
     else:
         if start_node not in graph:
             raise ValueError(
-                f"Specified start node '{start_node}' does not exist in the graph."
+                f"The specified start node '{start_node}' is not in the graph."
             )
-        print(f"BFS starting node: {start_node} (specified node)")
+        print(f"BFS start node: {start_node} (specified)")
 
     bfs_order = list(nx.bfs_tree(graph, source=start_node).nodes())
 
@@ -45,15 +48,16 @@ def get_bfs_ordered_adjacency_matrix(graph, start_node=None):
 
 def get_dfs_ordered_adjacency_matrix(graph, start_node=None):
     """
-    Returns the adjacency matrix of a given graph with nodes reordered by DFS traversal.
+    Return the adjacency matrix with nodes ordered by depth-first search (DFS).
 
     Args:
-        graph (nx.Graph): A NetworkX graph object.
-        start_node: The starting node for DFS. If None, the first node in the sorted node list is used.
+        graph (nx.Graph): NetworkX graph.
+        start_node: Starting node for DFS. If None, use the first node in sorted order.
+                    GraphRNN-style random selection is also possible. The sorted order gives reproducible results.
 
     Returns:
-        np.ndarray: The DFS-ordered adjacency matrix.
-        list: The new order of nodes determined by DFS.
+        np.ndarray: Adjacency matrix in DFS order.
+        list: Nodes in DFS order.
     """
     if not graph.nodes():
         return np.array([]), []
@@ -63,7 +67,7 @@ def get_dfs_ordered_adjacency_matrix(graph, start_node=None):
     else:
         if start_node not in graph:
             raise ValueError(
-                f"Specified start node '{start_node}' does not exist in the graph."
+                f"The specified start node '{start_node}' is not in the graph."
             )
 
     dfs_order = list(nx.dfs_preorder_nodes(graph, source=start_node))
@@ -75,15 +79,15 @@ def get_dfs_ordered_adjacency_matrix(graph, start_node=None):
 
 def get_degree_ordered_adjacency_matrix(graph):
     """
-    Returns the adjacency matrix of a given graph with nodes reordered by degree in descending order.
-    Nodes with the same degree are sorted by their original node ID in ascending order (tie-breaking).
+    Return the adjacency matrix with nodes ordered by descending degree.
+    Break ties by ascending original node ID.
 
     Args:
-        graph (nx.Graph): A NetworkX graph object.
+        graph (nx.Graph): NetworkX graph.
 
     Returns:
-        np.ndarray: The degree-ordered adjacency matrix.
-        list: The new order of nodes determined by degree.
+        np.ndarray: Adjacency matrix in degree order.
+        list: Nodes in degree order.
     """
     if not graph.nodes():
         return np.array([]), []
@@ -92,6 +96,7 @@ def get_degree_ordered_adjacency_matrix(graph):
 
     nodes_with_degrees = [(node, degree_dict[node]) for node in graph.nodes()]
 
+    # Sort by descending degree, breaking ties by ascending node ID.
     sorted_nodes_with_degrees = sorted(
         nodes_with_degrees, key=lambda item: (-item[1], item[0])
     )
@@ -105,17 +110,17 @@ def get_degree_ordered_adjacency_matrix(graph):
 
 def get_kcore_ordered_adjacency_matrix(graph):
     """
-    Returns the adjacency matrix of a given graph with nodes reordered based on k-core number and degree.
-    Nodes with higher k-core numbers are prioritized. For nodes with the same k-core number, those with higher degrees are prioritized.
-    If both k-core number and degree are the same, nodes are sorted by their original node ID in ascending order.
+    Return the adjacency matrix with nodes ordered by core number and degree.
+    Sort by descending core number, then by descending degree.
+    Break any remaining ties by ascending original node ID.
 
     Args:
-        graph (nx.Graph): A NetworkX graph object.
+        graph (nx.Graph): NetworkX graph.
 
     Returns:
-        np.ndarray: The k-core and degree-ordered adjacency matrix.
-        list: The new order of nodes determined by k-core and degree.
-        dict: A dictionary mapping nodes to their k-core numbers.
+        np.ndarray: Adjacency matrix in core number and degree order.
+        list: Nodes in core number and degree order.
+        dict: Core number for each node.
     """
     if not graph.nodes():
         return np.array([]), [], {}
@@ -123,8 +128,10 @@ def get_kcore_ordered_adjacency_matrix(graph):
     core_numbers = nx.core_number(graph)
     degrees = dict(graph.degree())
 
-    print("k-core numbers for each node:", core_numbers)
-    print("Degrees for each node:", degrees)
+    print("Core number for each node:", core_numbers)
+    print("Degree of each node:", degrees)
+
+    # Sort by descending core number, then descending degree, then ascending node ID.
 
     nodes = list(graph.nodes())
 
@@ -156,7 +163,7 @@ def get_community_ordered_adjacency_matrix(graph):
 
 
 """
-Save binary Barabasi-Albert, Watts-Strogatz, Stochastic Block Model, Planar graphs' adjacency matrix.
+save binary Barabasi-Albert, Watts-Strogatz, Stochastic Block Model, Planar graphs' adjacency matrix
 """
 
 
@@ -230,7 +237,7 @@ def save_all_adj_matrices(num=500, output_path="data/raw", seed=64):
 
 
 """
-Save weighted Barabasi-Albert graphs' adjacency matrix.
+save weighted Barabasi-Albert graphs' adjacency matrix
 """
 
 
@@ -242,10 +249,10 @@ def save_wba_adj_matrix(num=500, n=64, m=4, output_path="data/continuous/raw"):
         ba.append(graph)
     ba_adj_matrix = [get_dfs_ordered_adjacency_matrix(graph)[0] for graph in ba]
     ba_adj_matrix = np.array(ba_adj_matrix)
-
     print(f"BA graph generated: {ba_adj_matrix.shape}")
 
     np.savez(f"{output_path}/wba_dence_dfs_adj_matrix.npz", adj_matrix=ba_adj_matrix)
+
 
 def save_vectorized_adj_matrix(data, dataname, output_path="data/processed"):
     # data: list of adjacency matrix
@@ -296,4 +303,24 @@ def show_avg(npz_path, name):
     plt.savefig(f"{name}_avg_adj_visualization.pdf")
 
 
+def prepare_hcp_connectomes(
+    input_dir="data/hcp/raw_csv", output_path="data/hcp/processed"
+):
+    csv_files = glob.glob(f"{input_dir}/*.csv")
+    data_list = []
 
+    for file in csv_files:
+        df = pd.read_csv(file, header=None)
+        adj_matrix = df.values[:-19, :-19]  # Exclude the last 19 rows and columns
+        vectorized_adj = matrix_to_vec(adj_matrix)
+        data_list.append(vectorized_adj)
+
+    data_array = np.array(data_list)
+    print(f"HCP connectomes loaded: {data_array.shape}")
+
+    Path(output_path).mkdir(parents=True, exist_ok=True)
+    np.savez(f"{output_path}/hcp_connectomes.npz", adj_matrix=data_array)
+
+
+if __name__ == "__main__":
+    prepare_hcp_connectomes()
